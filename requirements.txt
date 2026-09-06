@@ -1,0 +1,7 @@
+fastapi==0.115.8
+pydantic==2.10.6
+uvicorn==0.34.0
+openai>=1.30.0
+
+# 可选：仅当 llm.provider=ollama（本地模型）时需要
+ollama==0.4.7

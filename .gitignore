@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+
+# 运行时日志与投递数据（含个人求职记录，切勿提交）
+*.log
+*.jsonl
+cache.json
+server.out.log
+server.err.log
+
+# 个人私有配置与简历（对外请用 *.example 模板）
+user_config.json
+resume.md
+resume-lock.md
+
+# 个人证件图片（学历证明截图等，切勿提交）
+assets/*.jpg
+assets/*.jpeg
+assets/*.png
+
+# 个人本机守护脚本（含本机绝对路径，不发布）
+backend_watchdog.ps1
+
+# 个人开发记录
+PROJECT_MEMORY.md
+DEV_LOG.md
+
+# 其他
+.codex
+test.*
+goodjobs.zip

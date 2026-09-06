@@ -1,0 +1,97 @@
+{
+  "resume_name": "resume.md",
+  "think_model": "qwen3:0.6b",
+  "chat_model": "qwen3:0.6b",
+  "introduce": "您好，我对贵司这个岗位很感兴趣，我的技能与岗位要求较为匹配，方便的话想请您看下我的简历。",
+  "character": "简洁 直接 礼貌",
+  "tags": [
+    "在这里填你的目标岗位关键词1",
+    "在这里填你的目标岗位关键词2",
+    "在这里填你的目标岗位关键词3"
+  ],
+  "backend": {
+    "job_score_delay_base_ms": 4000,
+    "job_score_delay_jitter_ms": 500
+  },
+  "llm": {
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "model": "gpt-4o-mini",
+    "api_key_env": "OPENAI_API_KEY",
+    "api_key": "",
+    "timeout": 120
+  },
+  "auto_reply": {
+    "addr_accept_text": "可以的，这个工作地点我能接受。",
+    "salary_text": "您好，薪资方面可以再沟通，期待进一步了解岗位职责。",
+    "reject_text": "不好意思，不太合适哈，祝早日找到合适的人选。",
+    "education_keywords": ["本科", "学信网", "学历", "学位", "毕业证"],
+    "education_image": "/assets/xuexin.jpg"
+  },
+  "frontend": {
+    "serverHost": "http://127.0.0.1:8000",
+    "resumeIndex": 0,
+    "thread": 50,
+    "timestampTimeout": 3000,
+    "onlyGreet": false,
+    "manualFilterWaitMs": 10000,
+    "roundRestartDelayMs": 2000,
+    "maxEmptyRounds": 3,
+    "detailTimeout": 10000,
+    "greetTimeout": 12000,
+    "preloadScrollPixels": 180,
+    "preloadScrollWaitMs": 450,
+    "preloadStableRoundsLimit": 24,
+    "preloadMaxRounds": 300,
+    "preloadActivateCardEvery": 0,
+    "preloadActivateCardWaitMs": 250,
+    "requireHrActive": true,
+    "allowedHrActive": ["刚刚活跃", "今日活跃", "3日内活跃", "本周活跃"]
+  },
+  "scoring": {
+    "_comment": "以下为通用示例，请按你的求职方向替换关键词与分值。分值含义见 readme.md 的配置说明。",
+    "_comment_mode": "score_mode=count：不算权重，只要岗位标题+描述里命中的匹配词（下面各正向词表去重）数量 ≥ match_count_threshold 就投递；=weight：用旧的加权评分。title_block_keywords 为硬拦截，命中则直接不投。",
+    "score_mode": "count",
+    "match_count_threshold": 4,
+    "title_required_keywords": ["在这里填标题必须包含的词1", "在这里填标题必须包含的词2"],
+    "title_block_keywords": {
+      "销售": 100,
+      "客服": 100,
+      "运营": 100,
+      "行政": 100,
+      "财务": 100,
+      "人事": 100,
+      "招聘": 100,
+      "管培生": 100,
+      "储备干部": 100,
+      "项目经理": 100
+    },
+    "title_penalty_keywords": {
+      "实习": 10,
+      "兼职": 20,
+      "外包": 10,
+      "驻场": 10
+    },
+    "title_strong_keywords": {
+      "在这里填你的核心岗位名": 92,
+      "在这里填你的核心岗位名2": 88
+    },
+    "title_medium_keywords": {
+      "在这里填相关方向词": 55,
+      "在这里填相关技能词": 50
+    },
+    "detail_infra_keywords": {
+      "在这里填强匹配技能1": 8,
+      "在这里填强匹配技能2": 8,
+      "python": 6
+    },
+    "detail_support_keywords": {
+      "在这里填中匹配技能1": 5,
+      "在这里填弱匹配技能1": 2,
+      "sql": 4
+    },
+    "detail_negative_keywords": {
+      "在这里填不想要的技术或方向": 12
+    }
+  }
+}
