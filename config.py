@@ -5,6 +5,7 @@ import os
 
 DEFAULT_USER_CONFIG = {
     'resume_name': 'resume.md',
+    'profile_name': 'profile_projects.md',  # 项目与技术栈事实表，与简历一起作为代聊天 LLM 的上下文
     'think_model': 'qwen3:0.6b',
     'chat_model': 'qwen3:0.6b',
     'introduce': '您好，我是一名对 AI 应用开发、自动化流程和工程落地感兴趣的求职者，想进一步了解这个岗位。',
@@ -14,11 +15,21 @@ DEFAULT_USER_CONFIG = {
         'job_score_delay_base_ms': 4000,
         'job_score_delay_jitter_ms': 500,
     },
+    'notify': {
+        # 前端检测到 Boss直聘机器人验证弹窗时，调 /notify 由后端通过微信公众号推送到手机
+        # PushPlus：http://www.pushplus.plus 关注公众号后官网获取 token（推荐，免费额度足够）
+        # Server酱：https://sct.ftqq.com 登录后获取 SendKey
+        'enabled': True,
+        'provider': 'pushplus',  # 'pushplus' 或 'serverchan'
+        'pushplus_token': '',
+        'serverchan_send_key': '',
+        'cooldown_seconds': 120,  # 同一 key 的推送冷却，防止验证持续弹窗时刷屏
+    },
     'llm': {
         # 代聊天等 LLM 能力的供应商：'openai'（任意 OpenAI 兼容接口）或 'ollama'（本地）
         'provider': 'openai',
         'base_url': 'https://api.openai.com/v1',
-        'model': 'gpt-4o-mini',
+        'model': 'gpt-4o-mini',  # 聊天视觉决策要求此模型支持图像输入（image_url），如 gpt-4o-mini
         'api_key_env': 'OPENAI_API_KEY',
         'api_key': '',
         'timeout': 120,
@@ -30,6 +41,13 @@ DEFAULT_USER_CONFIG = {
         'reject_text': '不好意思，不太合适哈，祝早日找到合适的人选。',
         'education_keywords': ['本科', '学信网', '学历', '学位', '毕业证'],  # 对方消息含任一关键词时自动发送学历证明图
         'education_image': '/assets/xuexin.jpg',  # 学历证明图路由（后端 /assets/xuexin.jpg 提供文件）
+        # 聊天页 LLM 视觉决策（截图+文本→视觉 LLM→精简回复/发学历图/发简历）；依赖 llm.model 为支持视觉的模型
+        'llm_chat': {
+            'enabled': True,          # 总开关；关闭则前端不走 LLM 决策
+            'use_screenshot': True,   # 是否用 html2canvas 截图并作为 image_url 一并发给视觉 LLM
+            'jpeg_quality': 0.8,      # 截图 JPEG 压缩质量（0-1）
+            'max_width': 720,         # 截图最大宽度（px），超出按比例缩放以控制体积
+        },
     },
     'frontend': {
         'serverHost': 'http://127.0.0.1:8000',
@@ -48,13 +66,15 @@ DEFAULT_USER_CONFIG = {
         'preloadMaxRounds': 300,
         'preloadActivateCardEvery': 0,
         'preloadActivateCardWaitMs': 250,
+        'chatRunIdleTimeoutMs': 180000,  # 聊天页看门狗：连续无状态心跳多少秒才判卡死（聊天页每处理一条消息会续期）
+                'chatRecheckWindowMs': 1800000,  # 未读红点消失后，列表时间在此窗口内的会话仍会复查，避免人工看过就永远不回
         'requireHrActive': True,
         'allowedHrActive': ['刚刚活跃', '今日活跃', '3日内活跃', '本周活跃'],
     },
     'scoring': {
         'score_mode': 'count',  # 'count'=命中匹配词数量达阈就投（不算权重）；'weight'=旧的加权评分
         'match_count_threshold': 4,  # count 模式：命中多少个匹配词（岗位标题词+技能词，去重）及以上才投递
-        'title_required_keywords': ['数据开发', '数据分析', 'agent', '模型开发'],  # 标题硬门槛：标题必须包含其中之一才可能投递
+        'title_required_keywords': ['数据开发', '数据分析', '数据应用', 'agent', '智能体', '模型开发', '数仓', '数据仓库', 'etl', 'ai应用', 'ai开发', 'ai工程师', '大模型', 'aigc', 'llm', 'langchain', '人工智能'],  # 标题硬门槛：标题必须包含其中之一才可能投递（忽略空格）
         'title_block_keywords': {
             '测试': 100,
             '销售': 100,
@@ -89,6 +109,16 @@ DEFAULT_USER_CONFIG = {
             '硬件': 100,
             '渠道': 100,
             '光伏': 100,
+            # 方向不对口的后端/投放类岗：计数模式下扣分词不生效，必须走标题硬拦截
+            '后端': 100,
+            '后台开发': 100,
+            'java': 100,
+            '全栈': 100,
+            'go': 100,
+            '广告投放': 100,
+            '投放优化': 100,
+            '媒介投放': 100,
+            '优化师': 100,
         },
         'title_penalty_keywords': {
             'java': 35,
@@ -306,6 +336,7 @@ USER_CONFIG = load_user_config()
 
 class Config:
     resume_name = USER_CONFIG['resume_name']
+    profile_name = USER_CONFIG.get('profile_name', 'profile_projects.md')
     think_model = USER_CONFIG['think_model']
     chat_model = USER_CONFIG['chat_model']
     introduce = USER_CONFIG['introduce']
@@ -326,29 +357,45 @@ class Config:
     score_mode = USER_CONFIG['scoring'].get('score_mode', 'count')
     match_count_threshold = USER_CONFIG['scoring'].get('match_count_threshold', 4)
     title_required_keywords = USER_CONFIG['scoring'].get(
-        'title_required_keywords', ['数据开发', '数据分析', 'agent', '模型开发'])
+        'title_required_keywords',
+        ['数据开发', '数据分析', '数据应用', 'agent', '智能体', '模型开发', '数仓', '数据仓库', 'etl',
+         'ai应用', 'ai开发', 'ai工程师', '大模型', 'aigc', 'llm', 'langchain', '人工智能'])
 
     frontend = USER_CONFIG['frontend']
     backend = USER_CONFIG['backend']
     scoring = USER_CONFIG['scoring']
     llm = USER_CONFIG['llm']
     auto_reply = USER_CONFIG['auto_reply']
+    notify = USER_CONFIG.get('notify') or {}
 
     @classmethod
     def get_default_introduce(cls):
         return cls.introduce
 
     @classmethod
-    def get_resume_text(cls) -> str:
-        """读取简历文本（供代聊天 LLM 做上下文），不存在则返回空串。"""
+    def __read_md(cls, filename: str) -> str:
         try:
-            p = os.path.join(os.path.dirname(os.path.abspath(__file__)), cls.resume_name)
+            p = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
             if os.path.exists(p):
                 with open(p, 'r', encoding='utf-8') as f:
-                    return f.read()
+                    return f.read().strip()
         except Exception:
             pass
         return ''
+
+    @classmethod
+    def get_resume_text(cls) -> str:
+        """简历 + 项目事实表（供代聊天 LLM 做上下文），文件不存在则自动跳过。"""
+        parts = []
+        resume = cls.__read_md(cls.resume_name)
+        if resume:
+            parts.append(resume)
+        profile = cls.__read_md(cls.profile_name)
+        if profile:
+            parts.append(
+                '# 项目与技术栈事实表（回答 HR 提问时以此为准，表里没有的内容一律不得编造）\n' + profile
+            )
+        return '\n\n'.join(parts)
 
     @classmethod
     def get_client_config(cls):

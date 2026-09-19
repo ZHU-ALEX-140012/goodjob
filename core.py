@@ -3,7 +3,7 @@ try:
 except ImportError:
     chat = None
     Message = None
-from prompts import INTRODUCE, TAGS, CHARACTER, CHAT, INTERSET, NEEDRESUME, NEEDWORKS
+from prompts import INTRODUCE, TAGS, CHARACTER, CHAT, CHAT_DECIDE, INTERSET, NEEDRESUME, NEEDWORKS
 from config import Config
 from tools import getLLMReply
 from schema import InterestValue, NeedResume, NeedWorks
@@ -107,11 +107,35 @@ def __normalize_text(text: str) -> str:
     return text.lower()
 
 
-def __find_matches(text: str, keyword_scores: dict[str, int]) -> list[tuple[str, int]]:
+def __compact_text(text: str) -> str:
+    """去掉全部空白，兼容 "AI 应用开发工程师" 这类被空格拆开的标题。"""
+    return re.sub(r'\s+', '', text)
+
+
+def __contains_keyword(text: str, keyword: str) -> bool:
+    """关键词包含判定：先按小写原文比对，再按去空格比对，避免标题里的空格把词拆开导致漏匹配。
+
+    长度不超过 2 的纯英文词（如 ai / go / ui）要求前后不是字母或数字，
+    否则 email 会误命中 ai、logo 会误命中 go。
+    """
     normalized = __normalize_text(text)
+    target = __normalize_text(keyword)
+    if not target:
+        return False
+    if target.isascii() and len(target) <= 2:
+        pattern = rf'(?<![a-z0-9]){re.escape(target)}(?![a-z0-9])'
+        if re.search(pattern, normalized):
+            return True
+        return re.search(pattern, __compact_text(normalized)) is not None
+    if target in normalized:
+        return True
+    return __compact_text(target) in __compact_text(normalized)
+
+
+def __find_matches(text: str, keyword_scores: dict[str, int]) -> list[tuple[str, int]]:
     matches = []
     for keyword, score in keyword_scores.items():
-        if keyword.lower() in normalized:
+        if __contains_keyword(text, keyword):
             matches.append((keyword, score))
     return matches
 
@@ -169,8 +193,9 @@ def evaluateJobMatch(job: str):
     # 标题必需关键词硬门槛：标题必须包含指定关键词之一（如 数据开发/数据分析/agent/模型开发），否则不投
     title_required = getattr(Config, 'title_required_keywords', None) or []
     if title_required:
-        title_norm = __normalize_text(title)
-        if not any(str(kw).lower() in title_norm for kw in title_required):
+        if not any(__contains_keyword(title, str(kw)) for kw in title_required):
+            # 门槛未过时仍统计正向命中词，便于日志里看清“差在哪”，但分数保持 0 不投
+            diag_matches = __collect_positive_matches(title, detail)
             return {
                 'title': title,
                 'detail': detail,
@@ -178,8 +203,8 @@ def evaluateJobMatch(job: str):
                 'keyword': None,
                 'score': 0,
                 'blocked': True,
-                'matched_count': 0,
-                'matched_keywords': [],
+                'matched_count': len(diag_matches),
+                'matched_keywords': diag_matches,
                 'match_count_threshold': int(getattr(Config, 'match_count_threshold', 4)),
                 'title_score': 0,
                 'detail_score': 0,
@@ -193,7 +218,10 @@ def evaluateJobMatch(job: str):
                 'detail_infra_matches': [],
                 'detail_support_matches': [],
                 'detail_negative_matches': [],
-                'reason': '岗位标题未包含必需关键词（' + '、'.join(title_required) + '），不投',
+                'reason': (
+                    '岗位标题未包含必需关键词，不投（JD 内正向命中：' + '、'.join(diag_matches[:10]) + '）'
+                    if diag_matches else '岗位标题未包含必需关键词，不投'
+                ),
             }
 
     # 计数模式（默认）：不算权重，只要命中的匹配词数量 ≥ 阈值就投递
@@ -374,6 +402,78 @@ def replyMsg(msgs: list, resume: str, character: str):
         print(word, end="", flush=True)
     print()
     return getLLMReply(content)
+
+
+def __format_msgs_text(msgs: list) -> str:
+    """把聊天消息列表拼成可读文本（HR/我），供多模态决策的文本部分使用。"""
+    lines = []
+    for m in msgs:
+        if isinstance(m, dict):
+            role, content = m.get('role', 'user'), m.get('content', '')
+        else:
+            role, content = getattr(m, 'role', 'user'), getattr(m, 'content', '')
+        if hasattr(role, 'value'):
+            role = role.value
+        who = 'HR' if str(role) == 'user' else '我'
+        text = str(content).strip()
+        if text:
+            lines.append(f'{who}: {text}')
+    return '\n'.join(lines)
+
+
+def decideChatReply(screenshot: str, msgs: list, recent: str, resume: str, character: str,
+                    resume_sended: bool = False, edu_sent: bool = False, job_title: str = '') -> dict:
+    """截图+文本 → 视觉 LLM → 结构化决策（精简回复 / 是否发学历图 / 是否发简历）。
+
+    多模态 user content 手工构造，不走 __to_dicts（它会把 content 强转 str）。
+    """
+    if not __use_openai():
+        raise RuntimeError('聊天决策依赖视觉 LLM：openai 兼容接口未配置或不可用（需 llm.model 支持视觉，如 gpt-4o-mini）')
+
+    resume_sended = bool(resume_sended)
+    edu_sent = bool(edu_sent)
+
+    text_parts = []
+    if job_title:
+        text_parts.append(f'当前岗位：{job_title}')
+    text_parts.append(
+        f'状态标志：resumeSended={str(resume_sended).lower()}, eduSent={str(edu_sent).lower()}'
+    )
+    if recent:
+        text_parts.append(f'最近聊天文本：\n{recent}')
+    msgs_text = __format_msgs_text(msgs)
+    if msgs_text:
+        text_parts.append(f'聊天消息：\n{msgs_text}')
+    text_parts.append('请结合以上信息与聊天截图，输出决策 JSON。')
+    text_content = '\n\n'.join(text_parts)
+
+    user_content = [{'type': 'text', 'text': text_content}]
+    shot = str(screenshot or '').strip()
+    if shot:
+        user_content.append({'type': 'image_url', 'image_url': {'url': shot}})
+    else:
+        # 无截图时直接用纯字符串 content，最大化与 OpenAI 兼容接口/代理的兼容性
+        user_content = text_content
+
+    messages = [
+        {'role': 'system', 'content': CHAT_DECIDE.format(resume=resume, character=character)},
+        {'role': 'user', 'content': user_content},
+    ]
+    data = llm.chat_json(
+        messages,
+        temperature=0.3,
+        json_hint='{"reply":"","send_education_image":false,"send_resume":false}',
+    )
+
+    reply = str(data.get('reply') or '').strip()
+    send_edu = bool(data.get('send_education_image'))
+    send_resume = bool(data.get('send_resume'))
+    # 已发过则强制对应标志 false（去重安全阀）
+    if edu_sent:
+        send_edu = False
+    if resume_sended:
+        send_resume = False
+    return {'reply': reply, 'send_education_image': send_edu, 'send_resume': send_resume}
 
 
 def isNeedResume(msgs: list):

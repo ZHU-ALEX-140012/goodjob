@@ -13,6 +13,13 @@
     "job_score_delay_base_ms": 4000,
     "job_score_delay_jitter_ms": 500
   },
+  "notify": {
+    "enabled": true,
+    "provider": "pushplus",
+    "pushplus_token": "",
+    "serverchan_send_key": "",
+    "cooldown_seconds": 120
+  },
   "llm": {
     "provider": "openai",
     "base_url": "https://api.openai.com/v1",
@@ -26,7 +33,13 @@
     "salary_text": "您好，薪资方面可以再沟通，期待进一步了解岗位职责。",
     "reject_text": "不好意思，不太合适哈，祝早日找到合适的人选。",
     "education_keywords": ["本科", "学信网", "学历", "学位", "毕业证"],
-    "education_image": "/assets/xuexin.jpg"
+    "education_image": "/assets/xuexin.jpg",
+    "llm_chat": {
+      "enabled": true,
+      "use_screenshot": true,
+      "jpeg_quality": 0.8,
+      "max_width": 720
+    }
   },
   "frontend": {
     "serverHost": "http://127.0.0.1:8000",
@@ -46,7 +59,9 @@
     "preloadActivateCardEvery": 0,
     "preloadActivateCardWaitMs": 250,
     "requireHrActive": true,
-    "allowedHrActive": ["刚刚活跃", "今日活跃", "3日内活跃", "本周活跃"]
+    "allowedHrActive": ["刚刚活跃", "今日活跃", "3日内活跃", "本周活跃"],
+    "chatRunIdleTimeoutMs": 180000,
+    "chatRecheckWindowMs": 1800000
   },
   "scoring": {
     "_comment": "以下为通用示例，请按你的求职方向替换关键词与分值。分值含义见 readme.md 的配置说明。",

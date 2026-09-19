@@ -17,6 +17,12 @@
 
 > ⚠️ **合规提示**：本项目仅供学习交流。自动操作招聘平台可能违反平台服务条款，请自行评估风险、控制频率并承担相应后果。
 
+## 📺 安装 & 使用教程视频
+
+不想读文档？跟着视频做就能跑起来：从环境安装、配置 `user_config.json`、启动后端到部署油猴脚本，全程演示。
+
+- 教程视频（B站）：https://www.bilibili.com/video/BV1AGet6BEFE
+
 ## 能做什么
 
 - 在 Boss 直聘岗位列表里轮换搜索关键词（`tags`）
@@ -24,7 +30,8 @@
 - 标题硬门槛（`title_required_keywords`）与硬拦截（`title_block_keywords`）双重过滤
 - 仅对活跃状态在白名单内的 HR 打招呼（`requireHrActive` / `allowedHrActive`）
 - 判定通过后自动打招呼
-- 收到 Boss 新消息后按规则处理：问工作地点→接受、问学历/学信网→发学历证明图、问薪资→配置话术、要简历→发简历
+- 收到 Boss 新消息后由视觉大模型看「页面截图 + 最近消息」做决策：精简回复 / 发学历证明图 / 发简历（需在 `llm` 配置大模型；未配置时仅消息回复不执行，投递主链不受影响）
+- 检测到机器人/人机验证（滑块弹窗）时自动暂停投递，页面常驻横幅+提示音提醒，并通过后端推送微信通知，手动完成验证后自动恢复（见 `notify` 配置）
 - 当日沟通达上限（如「今天已与 150 位 BOSS 沟通」）后自动停止投递、切去聊天页处理消息
 - 连续多轮没有新岗位时自动切换关键词继续挂机
 - 遇到超时、详情异常、打招呼异常时自动恢复
@@ -63,8 +70,9 @@ cp user_config.example.json user_config.json
 - `introduce`：打招呼语
 - `frontend.thread`：投递阈值（分数达到才打招呼）
 - `frontend.resumeIndex`：发第几份简历，从 0 开始
-- `scoring`：岗位打分词表（详见下方「打分配置」）
-- `auto_reply`：聊天自动回复话术（详见下方「自动回复配置」）
+- `scoring`：岗位判定词表（详见下方「打分配置」）
+- `auto_reply`：聊天处理与 LLM 决策开关（详见下方「聊天处理配置」）
+- `notify.pushplus_token`（可选）：填了才能在触发机器人验证时收到微信提醒
 
 ### 3.（可选）准备简历文件
 
@@ -86,6 +94,8 @@ Windows 下也可直接双击 `start_backend.bat`（前台）或 `start_backend.
 ### 5. 部署浏览器脚本
 
 把 `web_script.js` 的内容粘贴到 Tampermonkey 新建脚本中保存，然后打开 Boss 直聘职位搜索页即可自动运行。
+
+> 不会操作？看上面的 [📺 安装 & 使用教程视频](#-安装--使用教程视频)。
 
 ## 配置说明
 
@@ -110,6 +120,7 @@ Windows 下也可直接双击 `start_backend.bat`（前台）或 `start_backend.
 - `detailTimeout` / `greetTimeout` / `timestampTimeout`：各环节超时
 - `preload*`：岗位列表预加载（滚动加载 DOM）的相关参数
 - `requireHrActive` / `allowedHrActive`：只对白名单内活跃状态（默认 刚刚活跃/今日活跃/3日内活跃/本周活跃）的 HR 打招呼；未识别到活跃状态一律跳过
+- `chatRunIdleTimeoutMs` / `chatRecheckWindowMs`：聊天页卡死看门狗与「已读未回」兜底复查窗口
 
 ### `backend`（后端运行参数）
 
@@ -131,27 +142,43 @@ Windows 下也可直接双击 `start_backend.bat`（前台）或 `start_backend.
 - `provider`：`openai`（任意 OpenAI 兼容接口）或 `ollama`（本地）
 - `provider=openai` 时：填 `base_url`、`model`，以及 `api_key`（或留空并用 `api_key_env` 指定的环境变量）。可对接 OpenAI、DeepSeek、月之暗面，或本地 vLLM / Ollama 的 OpenAI 兼容端点等
 - `provider=ollama` 时：需 `pip install ollama` 并本地拉起模型，配合 `think_model` / `chat_model`
-- 说明：**主链（打分 + 固定招呼 + 直接发简历 + 规则回复）不依赖 LLM**。LLM 仅用于 `/reply`、`/is-need-resume`、`/is-need-works` 这些遗留接口
+- 说明：**投递主链（打分 + 固定招呼）不依赖 LLM**。聊天消息处理走 `/chat-decide`（视觉决策，需 `model` 支持图像输入，如 gpt-4o-mini；把 `auto_reply.llm_chat.use_screenshot` 设为 false 可降级为纯文本决策）；`/reply`、`/is-need-resume`、`/is-need-works` 为遗留接口
 
-### `auto_reply`（聊天自动回复话术）
-
-脚本在聊天页会读取对方最新消息，按规则回复，话术全部可自定义：
+### `notify`（机器人验证 → 微信提醒）
 
 ```json
-"auto_reply": {
-  "addr_accept_text": "可以的，这个工作地点我能接受。",
-  "salary_text": "您好，薪资方面可以再沟通，期待进一步了解岗位职责。",
-  "reject_text": "不好意思，不太合适哈，祝早日找到合适的人选。",
-  "education_keywords": ["本科", "学信网", "学历", "学位", "毕业证"],
-  "education_image": "/assets/xuexin.jpg"
+"notify": {
+  "enabled": true,
+  "provider": "pushplus",
+  "pushplus_token": "",
+  "serverchan_send_key": "",
+  "cooldown_seconds": 120
 }
 ```
 
-- `addr_accept_text`：对方询问工作地点是否接受时的回复（若页面有「接受」弹窗会优先点弹窗按钮）
-- `salary_text`：对方询问薪资时的回复
+- 前端内置验证哨兵：搜索/详情/聊天页每 2 秒轮询检测验证弹窗，跨标签同步状态；命中后当前页常驻红色横幅+提示音，并调后端 `/notify` 推送到你的手机
+- `provider`：`pushplus`（去 http://www.pushplus.plus 微信扫码关注公众号后获取 token，推荐）或 `serverchan`（去 https://sct.ftqq.com 登录获取 SendKey）
+- 两个凭证按 `provider` 填其一；都没填时推送失败会在页面横幅提示原因，不影响自动暂停/恢复逻辑
+- `cooldown_seconds`：同类事件推送冷却，防止多标签/持续弹窗刷屏（验证未消失期间前端每分钟重试一次）
+- 弹窗消失（验证完成）后投递循环自动恢复；改本段配置后需重启后端生效
+
+### `auto_reply`（聊天处理与 LLM 决策）
+
+聊天回复由视觉大模型根据「聊天区截图 + 最近消息」决策，输出：回复文本 / 是否发学历图 / 是否发简历。相关字段：
+
+```json
+"auto_reply": {
+  "reject_text": "不好意思，不太合适哈，祝早日找到合适的人选。",
+  "education_image": "/assets/xuexin.jpg",
+  "llm_chat": { "enabled": true, "use_screenshot": true, "jpeg_quality": 0.8, "max_width": 720 }
+}
+```
+
 - `reject_text`：岗位判定不达标时的婉拒语
-- `education_keywords` / `education_image`：对方消息含任一关键词时，自动把本地学历证明图发给对方（后端 `/assets/xuexin.jpg` 提供文件，把你自己截图放到 `assets/xuexin.jpg`，或改路由指向别的图）；每个会话最多发一次
-- 规则优先级：工作地点 > 学历图 > 薪资 > 简历；都未命中且尚未发过简历时，兜底主动发简历
+- `education_image`：学历证明图的后端路由（把你自己截图放到 `assets/xuexin.jpg`）；每个会话最多发一次
+- `llm_chat.enabled`：LLM 决策总开关；`use_screenshot`：关闭后仅靠文本决策（`llm.model` 不支持视觉时建议关闭）；`jpeg_quality` / `max_width` 控制截图体积
+- LLM 决策失败时仅记录日志并跳过本条消息，不乱回话
+- `addr_accept_text`、`salary_text`、`education_keywords` 为旧版规则回复字段，保留仅为兼容
 
 ### `scoring`（岗位判定词表）
 

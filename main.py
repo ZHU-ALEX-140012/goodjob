@@ -1,7 +1,9 @@
 from datetime import datetime
 import asyncio
-import random
 import json
+import urllib.parse
+import urllib.request
+import random
 import sys
 from pathlib import Path
 
@@ -15,8 +17,8 @@ for _stream in (sys.stdout, sys.stderr):
 from fastapi import FastAPI, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from core import replyMsg, isNeedResume, isNeedWorks, evaluateSingleRouteDelivery
-from schema import Msg
+from core import replyMsg, isNeedResume, isNeedWorks, evaluateSingleRouteDelivery, decideChatReply
+from schema import Msg, ChatDecideRequest
 from config import Config
 
 
@@ -143,6 +145,63 @@ async def log_action(action: dict = Body(..., description="动作日志")):
     return {'success': True}
 
 
+# 推送冷却：同一 key 在 cooldown_seconds 内只推一次，多标签页重复检测不刷屏
+_NOTIFY_LAST_AT: dict[str, float] = {}
+
+
+def _send_wechat_push(title: str, content: str, provider: str, credential: str) -> tuple[bool, str]:
+    """同步发送微信推送（在线程池里跑，不阻塞事件循环），返回 (成功, 详情)"""
+    try:
+        if provider == 'serverchan':
+            url = f'https://sctapi.ftqq.com/{credential}.send'
+            body = urllib.parse.urlencode({'title': title, 'desp': content}).encode('utf-8')
+        else:  # pushplus
+            url = 'http://www.pushplus.plus/send'
+            body = json.dumps({
+                'token': credential,
+                'title': title,
+                'content': content,
+                'template': 'html',
+            }, ensure_ascii=False).encode('utf-8')
+        req = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json'})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read().decode('utf-8', errors='replace')
+        result = json.loads(raw or '{}')
+        # pushplus 成功 code=200，serverchan 成功 code=0
+        ok = result.get('code') in (0, 200)
+        return ok, str(result)[:300]
+    except Exception as e:
+        return False, str(e)[:300]
+
+
+@app.post("/notify", summary="外部通知（机器人验证等异常→微信推送提醒用户）")
+async def notify(payload: dict = Body(..., description="通知内容 {title, content, key}")):
+    title = str(payload.get('title') or 'goodJobs 提醒')[:100]
+    content = str(payload.get('content') or '')[:2000]
+    key = str(payload.get('key') or 'default')
+    cfg = Config.notify or {}
+    append_job_action_log({'action': 'notify_requested', 'key': key, 'title': title, 'content': content[:200]})
+    if not cfg.get('enabled', False):
+        return {'success': False, 'reason': 'notify 未启用（user_config.json 的 notify.enabled）'}
+    provider = str(cfg.get('provider') or 'pushplus')
+    credential = str(cfg.get('serverchan_send_key') if provider == 'serverchan' else cfg.get('pushplus_token') or '')
+    if not credential:
+        return {'success': False, 'reason': f'notify 未配置 {provider} 凭证（user_config.json 的 notify 段）'}
+    now = datetime.now().timestamp()
+    cooldown = max(0, int(cfg.get('cooldown_seconds') or 120))
+    last = _NOTIFY_LAST_AT.get(key, 0)
+    if now - last < cooldown:
+        append_job_action_log({'action': 'notify_cooldown', 'key': key})
+        return {'success': False, 'reason': f'冷却中（{cooldown}s 内不重复推送）'}
+    _NOTIFY_LAST_AT[key] = now
+    ok, detail = await asyncio.to_thread(_send_wechat_push, title, content, provider, credential)
+    append_job_action_log({'action': 'notify_sent', 'key': key, 'ok': ok, 'detail': detail})
+    if not ok:
+        # 发送失败不占用冷却窗口，下次请求可重试
+        _NOTIFY_LAST_AT.pop(key, None)
+    return {'success': ok, 'reason': None if ok else detail}
+
+
 @app.post("/reply", summary="回复消息")
 async def reply(msgs: list[Msg] = Body(..., description="消息列表")):
     try:
@@ -151,6 +210,26 @@ async def reply(msgs: list[Msg] = Body(..., description="消息列表")):
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
         # LLM 调用失败（额度用尽/代理未启动/网络不通等），返清晰错误便于前端与日志定位
+        raise HTTPException(status_code=502, detail=f'LLM 调用失败: {e}') from e
+
+
+@app.post("/chat-decide", summary="聊天截图+文本 → 视觉 LLM 决策回复")
+async def chat_decide(req: ChatDecideRequest = Body(..., description="聊天决策请求")):
+    try:
+        return decideChatReply(
+            req.screenshot,
+            req.msgs,
+            req.recent,
+            Config.get_resume_text(),
+            Config.character,
+            resume_sended=req.resumeSended,
+            edu_sent=req.eduSent,
+            job_title=req.jobTitle,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        # LLM 调用失败（额度用尽/代理未启动/网络不通/非视觉模型等），返清晰错误便于定位
         raise HTTPException(status_code=502, detail=f'LLM 调用失败: {e}') from e
 
 
