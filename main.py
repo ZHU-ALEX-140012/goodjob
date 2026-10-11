@@ -67,6 +67,10 @@ def append_job_action_log(action: dict):
         f.write(json.dumps(action_record, ensure_ascii=False) + '\n')
 
 
+@app.get("/health", include_in_schema=False, summary="健康检查（Docker HEALTHCHECK / CI 冒烟用）")
+async def health():
+    return {"ok": True, "time": datetime.now().isoformat(timespec="seconds")}
+
 @app.get("/tags", summary="获取职位标签")
 async def get_tags():
     return {
@@ -220,7 +224,7 @@ async def chat_decide(req: ChatDecideRequest = Body(..., description="聊天决�
             req.screenshot,
             req.msgs,
             req.recent,
-            Config.get_resume_text(),
+            Config.get_resume_text_for_job(req.jobTitle or ''),
             Config.character,
             resume_sended=req.resumeSended,
             edu_sent=req.eduSent,
