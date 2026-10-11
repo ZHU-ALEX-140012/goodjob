@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import re
 
 
 DEFAULT_USER_CONFIG = {
@@ -11,6 +12,27 @@ DEFAULT_USER_CONFIG = {
     'introduce': '您好，我是一名对 AI 应用开发、自动化流程和工程落地感兴趣的求职者，想进一步了解这个岗位。',
     'character': '简洁 直接 礼貌',
     'tags': ['运维开发', 'SRE', 'DevOps', '运维工程师', '平台工程师', 'AI应用', 'AI应用工程师', 'AI开发', 'AI产品经理'],
+    # 简历按岗位方向自动分流：命中某方向关键词的岗位→发对应附件简历 + 聊天用对应文字简历。
+    # 默认关闭，保证单简历用户行为不变；在 user_config.json 里把 enabled 设为 true 并配好 routes 即生效。
+    'resume_routing': {
+        'enabled': False,
+        'routes': [
+            {
+                'name': 'data',
+                'resume_index': 0,
+                'resume_file': 'resume_data.md',
+                'introduce': '',  # 该方向的打招呼话术；留空则回退全局 introduce
+                'keywords': ['数据开发', '数据分析', '大数据', '数仓', '数据仓库', 'etl', '指标', '建模', '风控', 'bi', 'gaussdb', 'hive', 'sql优化'],
+            },
+            {
+                'name': 'agent',
+                'resume_index': 1,
+                'resume_file': 'resume_agent.md',
+                'introduce': '',
+                'keywords': ['agent', '智能体', 'ai应用', 'ai开发', 'ai工程', '大模型', 'aigc', 'llm', 'langchain', 'langgraph', 'rag', '人工智能', 'mcp'],
+            },
+        ],
+    },
     'backend': {
         'job_score_delay_base_ms': 4000,
         'job_score_delay_jitter_ms': 500,
@@ -70,6 +92,27 @@ DEFAULT_USER_CONFIG = {
                 'chatRecheckWindowMs': 1800000,  # 未读红点消失后，列表时间在此窗口内的会话仍会复查，避免人工看过就永远不回
         'requireHrActive': True,
         'allowedHrActive': ['刚刚活跃', '今日活跃', '3日内活跃', '本周活跃'],
+        # 拟人化（防封号）：动作间隔抖动、逐字打字模拟、打招呼频控、静默时段；enabled=false 恢复旧行为
+        'humanize': {
+            'enabled': True,
+            'jobGapMinMs': 4000, 'jobGapMaxMs': 9000,          # 每个岗位之间的随机间隔
+            'longBreakEveryMin': 6, 'longBreakEveryMax': 10,   # 每 N 个岗位一次中休
+            'longBreakMinMs': 30000, 'longBreakMaxMs': 70000,
+            'coffeeBreakEveryMin': 16, 'coffeeBreakEveryMax': 24,  # 每 N 个岗位一次长休
+            'coffeeBreakMinMs': 180000, 'coffeeBreakMaxMs': 420000,
+            'greetPreReadMinMs': 1500, 'greetPreReadMaxMs': 4500,  # 打招呼前假读 JD 停顿
+            'chatContactGapMinMs': 3000, 'chatContactGapMaxMs': 9000,  # 聊天列表会话间隔
+            'chatReadMinMs': 900, 'chatReadMaxMs': 2600,        # 点开会话后假读停顿
+            'typingCharMinMs': 55, 'typingCharMaxMs': 170,      # 逐字打字间隔
+            'typingPauseChance': 0.10,                          # 打字中"思考停顿"概率
+            'typingPauseMinMs': 400, 'typingPauseMaxMs': 1300,
+            'hourGreetCap': 40,      # 每小时打招呼上限（滚动窗口），0=不限
+            'dailyGreetCap': 120,    # 每日打招呼安全上限（低于 Boss ~150），0=不限
+            'enforceActiveHours': True,  # 只在活跃时段投递，时段外只处理消息
+            'activeHourStart': 8,        # 小时级活跃时段（activeWindows 非空时忽略）
+            'activeHourEnd': 23,
+            'activeWindows': [],         # 分钟级高峰投递窗口，如 [{'start': '10:00', 'end': '11:30'}, {'start': '14:30', 'end': '16:30'}]
+        },
     },
     'scoring': {
         'score_mode': 'count',  # 'count'=命中匹配词数量达阈就投（不算权重）；'weight'=旧的加权评分
@@ -363,6 +406,7 @@ class Config:
 
     frontend = USER_CONFIG['frontend']
     backend = USER_CONFIG['backend']
+    resume_routing = USER_CONFIG.get('resume_routing') or {}
     scoring = USER_CONFIG['scoring']
     llm = USER_CONFIG['llm']
     auto_reply = USER_CONFIG['auto_reply']
@@ -384,10 +428,10 @@ class Config:
         return ''
 
     @classmethod
-    def get_resume_text(cls) -> str:
-        """简历 + 项目事实表（供代聊天 LLM 做上下文），文件不存在则自动跳过。"""
+    def __resume_text(cls, resume_filename: str) -> str:
+        """指定简历文件 + 项目事实表（供代聊天 LLM 做上下文），文件不存在则自动跳过。"""
         parts = []
-        resume = cls.__read_md(cls.resume_name)
+        resume = cls.__read_md(resume_filename)
         if resume:
             parts.append(resume)
         profile = cls.__read_md(cls.profile_name)
@@ -396,6 +440,63 @@ class Config:
                 '# 项目与技术栈事实表（回答 HR 提问时以此为准，表里没有的内容一律不得编造）\n' + profile
             )
         return '\n\n'.join(parts)
+
+    @classmethod
+    def get_resume_text(cls) -> str:
+        """默认文字简历（全局单份，未启用方向分流时使用）。"""
+        return cls.__resume_text(cls.resume_name)
+
+    @classmethod
+    def route_for_text(cls, text: str):
+        """按岗位文本（标题+描述/标题）判断方向：返回命中关键词最多的 route，未启用或无命中返回 None。"""
+        cfg = cls.resume_routing or {}
+        if not cfg.get('enabled'):
+            return None
+        compact = re.sub(r'\s+', '', (text or '').lower())
+        if not compact:
+            return None
+        best = None
+        best_hits = 0
+        for route in cfg.get('routes', []):
+            hits = 0
+            for kw in (route.get('keywords') or []):
+                k = re.sub(r'\s+', '', str(kw).lower())
+                if k and k in compact:
+                    hits += 1
+            if hits > best_hits:
+                best_hits = hits
+                best = route
+        return best if best_hits > 0 else None
+
+    @classmethod
+    def get_resume_index_for_job(cls, job_text: str) -> int:
+        """按岗位方向返回要发送的附件简历序号；未命中方向则回退 frontend.resumeIndex。"""
+        default = cls.frontend.get('resumeIndex', 0)
+        route = cls.route_for_text(job_text)
+        if route and route.get('resume_index') is not None:
+            try:
+                return int(route['resume_index'])
+            except (TypeError, ValueError):
+                return default
+        return default
+
+    @classmethod
+    def get_introduce_for_job(cls, job_text: str) -> str:
+        """按岗位方向返回打招呼话术；未启用/未命中或该方向未配 introduce 则回退全局 introduce。"""
+        route = cls.route_for_text(job_text)
+        if route and str(route.get('introduce') or '').strip():
+            return route['introduce'].strip()
+        return cls.introduce
+
+    @classmethod
+    def get_resume_text_for_job(cls, job_text: str) -> str:
+        """按岗位方向返回聊天用文字简历；未启用/未命中或该方向文件缺失则回退默认 resume.md。"""
+        route = cls.route_for_text(job_text)
+        if route and route.get('resume_file'):
+            text = cls.__resume_text(route['resume_file'])
+            if text:
+                return text
+        return cls.get_resume_text()
 
     @classmethod
     def get_client_config(cls):
