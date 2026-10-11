@@ -10,6 +10,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Tampermonkey](https://img.shields.io/badge/Userscript-Tampermonkey-F28500?logo=tampermonkey&logoColor=white)](https://www.tampermonkey.net/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/ZHU-ALEX-140012/goodjob/actions/workflows/ci.yml/badge.svg)](https://github.com/ZHU-ALEX-140012/goodjob/actions/workflows/ci.yml)
 
 **[能做什么](#能做什么)** · **[快速开始](#快速开始)** · **[配置说明](#配置说明)** · **[隐私与仓库说明](#隐私与仓库说明)**
 

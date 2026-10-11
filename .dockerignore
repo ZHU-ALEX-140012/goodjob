@@ -1,0 +1,32 @@
+# 构建上下文瘦身 + 隐私隔离（和 .gitignore 同一套纪律：机密绝不进镜像）
+.git
+__pycache__
+*.pyc
+
+# 个人私有配置 / 简历 / 证件图 / 投递日志 —— 一律运行时挂卷，不进镜像
+# （注意：只排个人简历，*-example 模板要进镜像当示例）
+user_config.json
+resume.md
+resume-lock.md
+assets/
+*.jpg
+*.jpeg
+*.png
+*.jsonl
+*.log
+cache.json
+
+# 浏览器脚本与 Windows 本机启动器不属于容器镜像
+web_script.js
+start_backend.bat
+start_backend.vbs
+backend_watchdog.ps1
+
+# 文档与开发记录不进镜像（LICENSE 保留）
+readme.md
+干净电脑部署操作手册.md
+PROJECT_MEMORY.md
+DEV_LOG.md
+.codex
+goodjobs.zip
+test_single_route_backend.py
